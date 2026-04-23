@@ -18,6 +18,7 @@ from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Request
 from fastapi.responses import FileResponse
 
+from api_monitor import build_status_block
 from deepdive import generate_deepdive
 from fetcher import fetch_all_news
 from generator import generate_script
@@ -158,6 +159,7 @@ async def run_morning_news() -> None:
     line_token = os.environ["LINE_CHANNEL_ACCESS_TOKEN"]
     line_user = os.environ["LINE_USER_ID_ZENI"]
     notion_key = os.environ["NOTION_API_KEY"]
+    railway_token = os.environ.get("RAILWAY_API_TOKEN")
     app_url = os.environ.get("APP_URL", "").rstrip("/")
 
     if not app_url:
@@ -168,30 +170,36 @@ async def run_morning_news() -> None:
     audio_path: Path | None = None
 
     try:
-        # Step 1: ニュース収集
-        logger.info("[Step 1] ニュース収集中...")
+        # Step 1: API残高取得
+        logger.info("[Step 1] API残高取得中...")
+        api_status = await asyncio.to_thread(build_status_block, anthropic_key, railway_token)
+        logger.info(f"  {api_status.splitlines()[0]}")
+
+        # Step 2: ニュース収集
+        logger.info("[Step 2] ニュース収集中...")
         news_by_genre = await asyncio.to_thread(fetch_all_news)
         total = sum(len(v) for v in news_by_genre.values())
         logger.info(f"  合計 {total} 件取得")
         numbered_news = _build_numbered_news(news_by_genre)
         save_news(numbered_news)
 
-        # Step 2: 原稿生成（Claude API）
-        logger.info("[Step 2] 原稿生成中 (Claude API)...")
-        script = await asyncio.to_thread(generate_script, news_by_genre, numbered_news)
+        # Step 3: 原稿生成（Claude API）
+        logger.info("[Step 3] 原稿生成中 (Claude API)...")
+        script = await asyncio.to_thread(generate_script, news_by_genre, numbered_news, api_status)
 
-        # Step 3: 音声生成（Google TTS）
-        logger.info("[Step 3] 音声生成中 (Google TTS)...")
+        # Step 4: 音声生成（Google TTS）
+        logger.info("[Step 4] 音声生成中 (Google TTS)...")
         filename = f"{uuid.uuid4().hex}.mp3"
         audio_path = AUDIO_DIR / filename
         duration_ms = await asyncio.to_thread(
             synthesize_speech, script, tts_key, str(audio_path)
         )
 
-        # Step 4: LINE送信
-        logger.info("[Step 4] LINE送信中...")
+        # Step 5: LINE送信
+        logger.info("[Step 5] LINE送信中...")
         audio_url = f"{app_url}/audio/{filename}"
         text_msg = (
+            f"{api_status}\n\n"
             f"おはようございます！\n"
             f"今日（{today_str}）の朝ニュース音声が届きました 🎙️\n"
             f"下の音声を再生してください。"
@@ -200,8 +208,8 @@ async def run_morning_news() -> None:
             send_news, line_user, line_token, text_msg, audio_url, duration_ms
         )
 
-        # Step 5: Notion保存
-        logger.info("[Step 5] Notion保存中...")
+        # Step 6: Notion保存
+        logger.info("[Step 6] Notion保存中...")
         notion_url = await asyncio.to_thread(
             save_to_notion, script, news_by_genre, notion_key
         )

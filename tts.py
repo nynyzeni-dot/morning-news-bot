@@ -3,6 +3,7 @@
 import base64
 import logging
 import httpx
+from api_monitor import track_tts_chars
 
 logger = logging.getLogger(__name__)
 
@@ -40,4 +41,5 @@ def synthesize_speech(text: str, api_key: str, output_path: str) -> int:
 
     duration_ms = int(len(audio_bytes) / MP3_BYTES_PER_SEC * 1000)
     logger.info(f"音声生成完了: {len(audio_bytes):,} bytes, 推定 {duration_ms // 1000}秒")
+    track_tts_chars(len(text))
     return duration_ms

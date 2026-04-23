@@ -32,6 +32,7 @@ URL：{item.get('url', '不明')}
     response = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=1500,
+        system="出力フォーマットを厳守してください。①②③の丸数字をそのまま使い、1. 2. 3. のような形式には変換しないでください。",
         messages=[{"role": "user", "content": prompt}],
     )
     result = response.content[0].text.strip()

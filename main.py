@@ -15,12 +15,14 @@ from pathlib import Path
 import uvicorn
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Request
 from fastapi.responses import FileResponse
 
+from deepdive import generate_deepdive
 from fetcher import fetch_all_news
 from generator import generate_script
-from line_sender import send_news
+from line_sender import send_news, send_text
+from news_store import load_news, save_news
 from notion_saver import save_to_notion
 from tts import synthesize_speech
 
@@ -66,9 +68,64 @@ async def run_manual(background_tasks: BackgroundTasks):
     return {"status": "started", "message": "朝のニュース配信を開始しました"}
 
 
+@app.post("/webhook")
+async def line_webhook(request: Request, background_tasks: BackgroundTasks):
+    """LINE Webhookエンドポイント：番号受信で深掘り配信"""
+    body = await request.json()
+    for event in body.get("events", []):
+        if event.get("type") != "message":
+            continue
+        msg = event.get("message", {})
+        if msg.get("type") != "text":
+            continue
+        text = msg.get("text", "").strip()
+        if text.isdigit() and 1 <= int(text) <= 12:
+            background_tasks.add_task(_handle_deepdive, int(text))
+    return {"status": "ok"}
+
+
 # ─────────────────────────────────────────
 # メイン処理
 # ─────────────────────────────────────────
+
+def _build_numbered_news(news_by_genre: dict[str, list[dict]]) -> list[dict]:
+    numbered = []
+    n = 1
+    for genre, items in news_by_genre.items():
+        for item in items:
+            numbered.append({
+                "number": n,
+                "genre": genre,
+                "title": item["title"],
+                "url": item.get("link", ""),
+            })
+            n += 1
+    return numbered
+
+
+async def _handle_deepdive(number: int) -> None:
+    anthropic_key = os.environ["ANTHROPIC_API_KEY"]
+    line_token = os.environ["LINE_CHANNEL_ACCESS_TOKEN"]
+    line_user = os.environ["LINE_USER_ID_ZENI"]
+
+    items = load_news()
+    if not items:
+        send_text(line_user, line_token, "今日のニュースリストが見つかりませんでした。朝の配信後に番号を送ってください。")
+        return
+
+    item = next((i for i in items if i["number"] == number), None)
+    if not item:
+        send_text(line_user, line_token, f"番号{number}のニュースは見つかりませんでした（今日は{len(items)}件）。")
+        return
+
+    try:
+        send_text(line_user, line_token, f"【{number}】{item['title']}\n\n深掘り中... 少々お待ちください🔍")
+        result = await asyncio.to_thread(generate_deepdive, item, anthropic_key)
+        send_text(line_user, line_token, result)
+    except Exception as e:
+        logger.error(f"深掘りエラー: {e}", exc_info=True)
+        send_text(line_user, line_token, f"深掘り生成でエラーが発生しました。\n{e}")
+
 
 async def run_morning_news() -> None:
     logger.info("=" * 50)
@@ -96,10 +153,12 @@ async def run_morning_news() -> None:
         news_by_genre = await asyncio.to_thread(fetch_all_news)
         total = sum(len(v) for v in news_by_genre.values())
         logger.info(f"  合計 {total} 件取得")
+        numbered_news = _build_numbered_news(news_by_genre)
+        save_news(numbered_news)
 
         # Step 2: 原稿生成（Claude API）
         logger.info("[Step 2] 原稿生成中 (Claude API)...")
-        script = await asyncio.to_thread(generate_script, news_by_genre)
+        script = await asyncio.to_thread(generate_script, news_by_genre, numbered_news)
 
         # Step 3: 音声生成（Google TTS）
         logger.info("[Step 3] 音声生成中 (Google TTS)...")

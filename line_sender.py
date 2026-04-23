@@ -40,3 +40,19 @@ def send_news(
         resp.raise_for_status()
 
     logger.info("LINE送信完了")
+
+
+def send_text(user_id: str, token: str, text: str) -> None:
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "to": user_id,
+        "messages": [{"type": "text", "text": text}],
+    }
+    resp = httpx.post(LINE_PUSH_URL, json=payload, headers=headers, timeout=30)
+    if resp.status_code != 200:
+        logger.error(f"LINE送信失敗: {resp.status_code} {resp.text}")
+        resp.raise_for_status()
+    logger.info("LINEテキスト送信完了")

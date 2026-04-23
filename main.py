@@ -68,20 +68,40 @@ async def run_manual(background_tasks: BackgroundTasks):
     return {"status": "started", "message": "朝のニュース配信を開始しました"}
 
 
+FORWARD_WEBHOOK_URL = "https://musubihira-company-production.up.railway.app/callback"
+
+
 @app.post("/webhook")
 async def line_webhook(request: Request, background_tasks: BackgroundTasks):
-    """LINE Webhookエンドポイント：番号受信で深掘り配信"""
-    body = await request.json()
+    """LINE Webhookエンドポイント：番号受信で深掘り配信、それ以外は既存botへ転送"""
+    raw_body = await request.body()
+    headers = {k: v for k, v in request.headers.items() if k.lower() != "host"}
+
+    body = await request.json() if raw_body else {}
+    handled = False
+
     for event in body.get("events", []):
-        if event.get("type") != "message":
-            continue
-        msg = event.get("message", {})
-        if msg.get("type") != "text":
-            continue
-        text = msg.get("text", "").strip()
-        if text.isdigit() and 1 <= int(text) <= 12:
-            background_tasks.add_task(_handle_deepdive, int(text))
+        if event.get("type") == "message":
+            msg = event.get("message", {})
+            if msg.get("type") == "text":
+                text = msg.get("text", "").strip()
+                if text.isdigit() and 1 <= int(text) <= 12:
+                    background_tasks.add_task(_handle_deepdive, int(text))
+                    handled = True
+
+    if not handled:
+        background_tasks.add_task(_forward_webhook, raw_body, headers)
+
     return {"status": "ok"}
+
+
+async def _forward_webhook(raw_body: bytes, headers: dict) -> None:
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.post(FORWARD_WEBHOOK_URL, content=raw_body, headers=headers)
+    except Exception as e:
+        logger.warning(f"Webhook転送失敗: {e}")
 
 
 # ─────────────────────────────────────────

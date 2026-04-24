@@ -7,7 +7,6 @@
 import asyncio
 import logging
 import os
-import tempfile
 import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -34,8 +33,16 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 JST = timezone(timedelta(hours=9))
-AUDIO_DIR = Path(tempfile.gettempdir()) / "morning_news_audio"
-AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+# /data はRailwayの永続ボリューム。未設定時は/tmpにフォールバック
+_VOLUME = Path(os.environ.get("AUDIO_VOLUME_PATH", "/data/audio"))
+try:
+    _VOLUME.mkdir(parents=True, exist_ok=True)
+    AUDIO_DIR = _VOLUME
+except OSError:
+    import tempfile
+    AUDIO_DIR = Path(tempfile.gettempdir()) / "morning_news_audio"
+    AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+    logger.warning(f"ボリューム作成失敗。/tmpにフォールバック: {AUDIO_DIR}")
 
 app = FastAPI(title="Morning News Bot")
 

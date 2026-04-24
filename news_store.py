@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
-_STORE = Path("/tmp/morning_news_today.json")
+_STORE = Path("/data/morning_news_today.json") if Path("/data").exists() else Path("/tmp/morning_news_today.json")
 
 
 def save_news(items: list[dict]) -> None:
